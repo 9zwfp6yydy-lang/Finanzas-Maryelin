@@ -193,6 +193,7 @@
         <input id="b-label" placeholder="Ej: Alquiler, súper…">
         <input id="b-amount" type="number" min="0" step="1" placeholder="Monto destinado en RD$">
         <button class="btn" id="b-add">Agregar al presupuesto</button>
+        <button class="btn" id="b-copy" style="margin-top:8px;opacity:.85">📋 Copiar presupuesto del mes anterior</button>
       </div>
       <div class="card">
         <h3>Presupuesto del mes</h3>
@@ -212,7 +213,8 @@
           <option value="🎓">🎓 Educación</option><option value="💊">💊 Salud</option>
           <option value="🍔">🍔 Comida</option><option value="🎉">🎉 Diversión</option>
         </select>
-        <input id="e-label" placeholder="¿En qué gastaste?">
+        <input id="e-label" placeholder="¿En qué gastaste?" list="e-cats" autocomplete="off">
+        <datalist id="e-cats"></datalist>
         <input id="e-amount" type="number" min="0" step="1" placeholder="Monto en RD$">
         <label class="checkline"><input type="checkbox" id="e-unexp"> ⚠️ Fue un imprevisto</label>
         <div id="e-utype-wrap" class="hidden">
@@ -309,9 +311,9 @@ let MONTH = curMonth();
 let READONLY = false;
 let DATA = { budget:[], expenses:[], income:[], wishlist:[], cards:[] };
 
-function toast(msg){
+function toast(msg, ms){
   const t = $("toast"); t.textContent = msg; t.style.display = "block";
-  clearTimeout(t._h); t._h = setTimeout(()=> t.style.display="none", 2600);
+  clearTimeout(t._h); t._h = setTimeout(()=> t.style.display="none", ms||2600);
 }
 const reasonPill = r => r==="necesidad" ? '<span class="pill teal">🧰 Necesidad</span>'
   : r==="capricho" ? '<span class="pill gold">✨ Capricho</span>' : '<span class="pill violet">💅 Gusto</span>';
@@ -374,6 +376,13 @@ async function refresh(){
 }
 function sum(arr){ return arr.reduce((a,x)=>a+Number(x.amount||x.planned_amount||0),0); }
 
+// Nombres alternos que Maryelin usa al registrar gastos -> categoría del presupuesto.
+// Así "Metro" cuenta en "Transporte" aunque no se escriba idéntico.
+const BUDGET_ALIAS = { "metro":"transporte", "apps":"apps (netflix + gmail)", "altice":"internet + fibra óptica" };
+const normLbl = s => String(s||"").toLowerCase().trim();
+const catOf = lbl => BUDGET_ALIAS[normLbl(lbl)] || normLbl(lbl);
+const spentFor = (label, list) => (list||[]).filter(e=>catOf(e.label)===normLbl(label)).reduce((a,e)=>a+Number(e.amount),0);
+
 function render(){
   const { budget, expenses, income, wishlist } = DATA;
   const totB = budget.reduce((a,x)=>a+Number(x.planned_amount),0);
@@ -422,15 +431,23 @@ function render(){
   }
 
   // presupuesto lista
-  $("budget-list").innerHTML = budget.length ? budget.map(x=>{
-    const spent = expenses.filter(e=>e.label.toLowerCase()===x.label.toLowerCase()).reduce((a,e)=>a+Number(e.amount),0);
-    const p = Number(x.planned_amount)>0 ? Math.min(100,Math.round(spent/Number(x.planned_amount)*100)) : 0;
-    const paid = Number(x.planned_amount)>0 && spent>=Number(x.planned_amount);
+  const totalPend = budget.reduce((a,x)=>a+Math.max(0,(Number(x.planned_amount)||0)-spentFor(x.label,expenses)),0);
+  const pendHtml = budget.length && totalPend>0 ? `<p class="muted" style="margin-bottom:8px">💰 Te faltan <strong>${fmt(totalPend)}</strong> por pagar en fijos este mes</p>` : "";
+  $("budget-list").innerHTML = pendHtml + (budget.length ? budget.map(x=>{
+    const spent = spentFor(x.label, expenses);
+    const planned = Number(x.planned_amount)||0;
+    const p = planned>0 ? Math.min(100,Math.round(spent/planned*100)) : 0;
+    const paid = planned>0 && spent>=planned;
+    const rem = planned-spent;
+    const flag = rem<0 ? ` · 🔴 Te pasaste por ${fmt(-rem)}` : (spent>0 ? ` · 🟢 Te quedan ${fmt(rem)}` : "");
     return `<div class="item"><div class="ico">${esc(x.icon||"🧮")}</div><div class="grow"><strong>${esc(x.label)}</strong>
-      <div class="meta">Destinado: ${fmt(x.planned_amount)} · Gastado: ${fmt(spent)}${paid?" · ✅ Pagado":""}</div>
+      <div class="meta">Destinado: ${fmt(planned)} · Gastado: ${fmt(spent)}${paid?" · ✅ Pagado":""}${flag}</div>
       <div class="bar" style="margin-top:6px;"><div style="width:${p}%"></div></div></div>
-      ${READONLY?"":`<div class="row"><button class="icon-btn" onclick="payBudget(${x.id})" title="Marcar como pagado">💰</button><button class="icon-btn" onclick="delBudget(${x.id})">🗑</button></div>`}</div>`;
-  }).join("") : '<p class="muted">Sin presupuesto todavía.</p>';
+      ${READONLY?"":`<div class="row"><button class="icon-btn" onclick="payBudget(${x.id})" title="Marcar como pagado">💰</button><button class="icon-btn" onclick="editBudget(${x.id})" title="Editar monto">✏️</button><button class="icon-btn" onclick="delBudget(${x.id})">🗑</button></div>`}</div>`;
+  }).join("") : '<p class="muted">Sin presupuesto todavía.</p>');
+  // sugerencias de categorías al registrar un gasto
+  const dl = $("e-cats");
+  if(dl) dl.innerHTML = budget.map(x=>`<option value="${esc(x.label)}">`).join("");
 
   // gastos lista
   $("exp-list").innerHTML = expenses.length ? expenses.map(x=>`
@@ -486,6 +503,20 @@ $("b-add").onclick = async ()=>{
   if(error){ toast("Error: "+error.message); return; }
   $("b-label").value=""; $("b-amount").value=""; toast("Agregado al presupuesto 🧮"); refresh();
 };
+$("b-copy").onclick = async ()=>{
+  if(READONLY) return;
+  const D=(typeof DATA!=="undefined"?DATA:{});
+  if((D.budget||[]).length && !confirm("Este mes ya tiene líneas. ¿Copiar las del mes anterior de todos modos?")) return;
+  const d = new Date(MONTH+"-01T12:00:00"); d.setMonth(d.getMonth()-1);
+  const prev = d.toISOString().slice(0,7);
+  const { data, error } = await sb.from("maryelin_budget").select("label,planned_amount,icon").eq("month", prev);
+  if(error){ toast("Error: "+error.message); return; }
+  if(!data.length){ toast("El mes anterior no tiene presupuesto 🧮"); return; }
+  const rows = data.map(x=>({ month:MONTH, label:x.label, planned_amount:x.planned_amount, icon:x.icon||"🧮" }));
+  const { error:err2 } = await sb.from("maryelin_budget").insert(rows);
+  if(err2){ toast("Error: "+err2.message); return; }
+  toast(`Presupuesto copiado (${rows.length} líneas) ✅`); refresh();
+};
 $("e-add").onclick = async ()=>{
   if(READONLY) return;
   const label=$("e-label").value.trim(), amount=Number($("e-amount").value);
@@ -530,11 +561,25 @@ window.updCard = async (id,cur)=>{
 window.delCard = async id=>{ if(READONLY||!confirm("¿Borrar esta tarjeta?"))return; await sb.from("maryelin_cards").delete().eq("id",id); refresh(); };
 window.markReady = async id=>{ await sb.from("maryelin_wishlist").update({status:"lista"}).eq("id",id); toast("Marcada como lista ✅💖"); refresh(); };
 window.delBudget = async id=>{ if(READONLY||!confirm("¿Borrar del presupuesto?"))return; await sb.from("maryelin_budget").delete().eq("id",id); refresh(); };
+window.editBudget = async id=>{
+  if(READONLY) return;
+  const D=(typeof DATA!=="undefined"?DATA:{});
+  const x=(D.budget||[]).find(b=>b.id===id);
+  if(!x) return;
+  const v = prompt(`Nuevo monto planeado para "${x.label}":`, String(x.planned_amount));
+  if(v===null) return;
+  const amount = Number(String(v).replace(/[^0-9.]/g,""));
+  if(!(amount>0)){ toast("Monto no válido 🙈"); return; }
+  const { error } = await sb.from("maryelin_budget").update({ planned_amount: amount }).eq("id", id);
+  if(error){ toast("Error: "+error.message); return; }
+  toast("Presupuesto actualizado ✅"); refresh();
+};
 window.payBudget = async id=>{
   if(READONLY) return;
-  const x = (typeof budget!=="undefined"?budget:[]).find(b=>b.id===id);
+  const D = (typeof DATA!=="undefined"?DATA:{});
+  const x = (D.budget||[]).find(b=>b.id===id);
   if(!x) return;
-  const spent = (typeof expenses!=="undefined"?expenses:[]).filter(e=>(e.label||"").toLowerCase()===String(x.label).toLowerCase()).reduce((a,e)=>a+Number(e.amount),0);
+  const spent = spentFor(x.label, D.expenses||[]);
   const planned = Number(x.planned_amount)||0;
   const remaining = Math.max(0, planned-spent);
   const v = prompt(`¿Cuánto pagaste de "${x.label}"?`, String(remaining>0?remaining:planned));
@@ -543,7 +588,33 @@ window.payBudget = async id=>{
   if(!(amount>0)){ toast("Monto no válido 🙈"); return; }
   const { error } = await sb.from("maryelin_expenses").insert({ month:MONTH, label:x.label, amount, icon:x.icon||"💸", is_unexpected:false, unexpected_type:null });
   if(error){ toast("Error: "+error.message); return; }
-  toast(`"${x.label}" marcado como pagado ✅`);
+  const newSpent = spent+amount;
+  const over = newSpent-planned;
+  const pick = a => a[Math.floor(Math.random()*a.length)];
+  let msg;
+  if(over>0) msg = pick([
+    `Anotado 💗 Te pasaste por ${fmt(over)} en "${x.label}" — sin culpa, los grandes meses se construyen día a día 🐾✨`,
+    `Listo ✅ "${x.label}" se pasó por ${fmt(over)} — respira, lo ajustas el próximo mes. ¡Tú puedes! 💪🐱`
+  ]);
+  else if(over===0) msg = pick([
+    `¡Impecable! 💎 "${x.label}" pagado al centavo — control total 🌟🐱`,
+    `¡Perfecto! 🎯 "${x.label}" exacto, ni un peso de más ni de menos — ¡qué precisión! ✨`
+  ]);
+  else msg = pick([
+    `¡Qué orgullo! 🌸 Pagaste "${x.label}" y te sobraron ${fmt(-over)} — así se cumplen las metas 🐱✨`,
+    `¡Lo hiciste genial! 💖 "${x.label}" pagado y ahorraste ${fmt(-over)} — cada peso te acerca a tus sueños 🌟`,
+    `¡Bravo! 🎀 "${x.label}" bajo control y te quedaron ${fmt(-over)} — sigue así, vas volando 🐱💫`
+  ]);
+  const allPaid = (D.budget||[]).every(b=>{
+    const s = b.id===x.id ? newSpent : spentFor(b.label, D.expenses||[]);
+    const p = Number(b.planned_amount)||0;
+    return p>0 && s>=p;
+  });
+  if(allPaid) msg += " " + pick([
+    `🏆 ¡INCREÍBLE! Completaste TODO tu presupuesto del mes — eres imparable 🌟💖`,
+    `🌟 ¡Mes dominado! Cada categoría pagada — disciplina de campeona 🏆🐱💗`
+  ]);
+  toast(msg, allPaid?7000:5000);
   refresh();
 };
 window.delExp = async id=>{ if(READONLY||!confirm("¿Borrar este gasto?"))return; await sb.from("maryelin_expenses").delete().eq("id",id); refresh(); };
