@@ -425,10 +425,11 @@ function render(){
   $("budget-list").innerHTML = budget.length ? budget.map(x=>{
     const spent = expenses.filter(e=>e.label.toLowerCase()===x.label.toLowerCase()).reduce((a,e)=>a+Number(e.amount),0);
     const p = Number(x.planned_amount)>0 ? Math.min(100,Math.round(spent/Number(x.planned_amount)*100)) : 0;
+    const paid = Number(x.planned_amount)>0 && spent>=Number(x.planned_amount);
     return `<div class="item"><div class="ico">${esc(x.icon||"🧮")}</div><div class="grow"><strong>${esc(x.label)}</strong>
-      <div class="meta">Destinado: ${fmt(x.planned_amount)} · Gastado: ${fmt(spent)}</div>
+      <div class="meta">Destinado: ${fmt(x.planned_amount)} · Gastado: ${fmt(spent)}${paid?" · ✅ Pagado":""}</div>
       <div class="bar" style="margin-top:6px;"><div style="width:${p}%"></div></div></div>
-      ${READONLY?"":`<button class="icon-btn" onclick="delBudget(${x.id})">🗑</button>`}</div>`;
+      ${READONLY?"":`<div class="row"><button class="icon-btn" onclick="payBudget(${x.id})" title="Marcar como pagado">💰</button><button class="icon-btn" onclick="delBudget(${x.id})">🗑</button></div>`}</div>`;
   }).join("") : '<p class="muted">Sin presupuesto todavía.</p>';
 
   // gastos lista
@@ -529,6 +530,22 @@ window.updCard = async (id,cur)=>{
 window.delCard = async id=>{ if(READONLY||!confirm("¿Borrar esta tarjeta?"))return; await sb.from("maryelin_cards").delete().eq("id",id); refresh(); };
 window.markReady = async id=>{ await sb.from("maryelin_wishlist").update({status:"lista"}).eq("id",id); toast("Marcada como lista ✅💖"); refresh(); };
 window.delBudget = async id=>{ if(READONLY||!confirm("¿Borrar del presupuesto?"))return; await sb.from("maryelin_budget").delete().eq("id",id); refresh(); };
+window.payBudget = async id=>{
+  if(READONLY) return;
+  const x = (typeof budget!=="undefined"?budget:[]).find(b=>b.id===id);
+  if(!x) return;
+  const spent = (typeof expenses!=="undefined"?expenses:[]).filter(e=>(e.label||"").toLowerCase()===String(x.label).toLowerCase()).reduce((a,e)=>a+Number(e.amount),0);
+  const planned = Number(x.planned_amount)||0;
+  const remaining = Math.max(0, planned-spent);
+  const v = prompt(`¿Cuánto pagaste de "${x.label}"?`, String(remaining>0?remaining:planned));
+  if(v===null) return;
+  const amount = Number(String(v).replace(/[^0-9.]/g,""));
+  if(!(amount>0)){ toast("Monto no válido 🙈"); return; }
+  const { error } = await sb.from("maryelin_expenses").insert({ month:MONTH, label:x.label, amount, icon:x.icon||"💸", is_unexpected:false, unexpected_type:null });
+  if(error){ toast("Error: "+error.message); return; }
+  toast(`"${x.label}" marcado como pagado ✅`);
+  refresh();
+};
 window.delExp = async id=>{ if(READONLY||!confirm("¿Borrar este gasto?"))return; await sb.from("maryelin_expenses").delete().eq("id",id); refresh(); };
 window.delInc = async id=>{ if(READONLY||!confirm("¿Borrar este ingreso?"))return; await sb.from("maryelin_income").delete().eq("id",id); refresh(); };
 window.delWish = async id=>{ if(READONLY||!confirm("¿Borrar este antojo?"))return; await sb.from("maryelin_wishlist").delete().eq("id",id); refresh(); };
